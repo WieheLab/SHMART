@@ -1,0 +1,148 @@
+#!/bin/bash
+#SBATCH --job-name=reverse_translate
+#SBATCH --ntasks=2
+#SBATCH --cpus-per-task=16
+#SBATCH --error=slurm-%j.err
+#SBATCH --mem=8G
+#SBATCH --ntasks-per-node=2
+#SBATCH --partition=dhvi
+
+## Load required modules
+module add R/4.0.0
+
+## HELP/USAGE 
+
+usage() {
+  cat <<EOF
+
+  Usage: sbatch $0 [OPTIONS]
+
+  Required Options:
+    -q <FILE>      Path to the query amino acid FASTA 
+    -t <TYPE>      Chain type: "heavy" or "light"
+    -d <DIR>       Directory containing reference files and scripts
+    -T <FILE>      Output file for "True" translations (e.g. ReverseTranslated.True.txt)
+    -F <FILE>      Output file for "False/Failed" translations (e.g. ReverseTranslated.FAILED.txt)
+    -A <FILE>      Output FASTA of successfully translated sequences (e.g. ReverseTranslated.True.fasta)
+    -h             Show this help message and exit
+
+EOF
+
+}
+
+# Initialize variables
+QUERY_AA_FASTA=""
+CHAIN_TYPE=""
+REF_DIR=""
+OUTPUT_TRUE=""
+OUTPUT_FALSE=""
+OUTPUT_FASTA=""
+
+while getopts ":q:t:d:T:F:A:h" opt; do
+  case $opt in
+    q) QUERY_AA_FASTA="$OPTARG" ;;
+    t) CHAIN_TYPE="$OPTARG" ;;
+    d) REF_DIR="$OPTARG" ;;
+    T) OUTPUT_TRUE="$OPTARG" ;;
+    F) OUTPUT_FALSE="$OPTARG" ;;
+    A) OUTPUT_FASTA="$OPTARG" ;;
+    h) usage; exit 0 ;;
+    \?) echo "Invalid option: -$OPTARG" >&2; usage; exit 1 ;;
+    :)  echo "Option -$OPTARG requires an argument." >&2; usage; exit 1 ;;
+  esac
+done
+
+## check args
+if [[ -z "$QUERY_AA_FASTA" || -z "$CHAIN_TYPE" || -z "$REF_DIR" || \
+      -z "$OUTPUT_TRUE" || -z "$OUTPUT_FALSE" || -z "$OUTPUT_FASTA" ]]; then
+  echo "ERROR: Missing required argument(s)."
+  usage
+  exit 1
+fi
+
+# Validate chain type
+if [[ "$CHAIN_TYPE" != "heavy" && "$CHAIN_TYPE" != "light" ]]; then
+  echo "ERROR: -t|--type must be either 'heavy' or 'light'."
+  exit 1
+fi
+
+## SET REFERENCE FILES BASED ON CHAIN TYPE
+
+if [[ "$CHAIN_TYPE" == "heavy" ]]; then
+  VREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGHV.aa.fasta"
+  JREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGHJ.aa.fasta"
+  VJ_REF_NUC="${REF_DIR}/databases/Pooled.Homo_sapiens.heavy.VJ.fasta"
+  VJ_REF_AA="${REF_DIR}/databases/Pooled.Homo_sapiens.heavy.VJ.aa.fasta"
+else
+  VREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGLV.aa.fasta"
+  JREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGLJ.aa.fasta"
+  VJ_REF_NUC="${REF_DIR}/databases/Pooled.Homo_sapiens.light.VJ.fasta"
+  VJ_REF_AA="${REF_DIR}/databases/Pooled.Homo_sapiens.light.VJ.aa.fasta"
+fi
+
+FIVEMER_SUB_CSV="${REF_DIR}/databases/FivemerMutationData.csv"
+
+MUTATION_CALLER_OUTPUT_VREGION="VRegion.MutationCaller_Output.txt"
+MUTATION_CALLER_OUTPUT_JREGION="JRegion.MutationCaller_Output.txt"
+
+# Check reference files
+for f in "$VREGION_REF_AA" "$JREGION_REF_AA" "$VJ_REF_NUC" "$VJ_REF_AA" "$FIVEMER_SUB_CSV"; do
+  if [[ ! -s "$f" ]]; then
+    echo "ERROR: Reference file $f does not exist or is empty."
+    exit 1
+  fi
+done
+
+#Run Commands
+echo "STARTING JOB: $(date)"
+echo "QUERY_AA_FASTA   = $QUERY_AA_FASTA"
+echo "CHAIN_TYPE       = $CHAIN_TYPE"
+echo "REF_DIR          = $REF_DIR"
+echo "VREGION_REF_AA   = $VREGION_REF_AA"
+echo "JREGION_REF_AA   = $JREGION_REF_AA"
+echo "VJ_REF_NUC       = $VJ_REF_NUC"
+echo "VJ_REF_AA        = $VJ_REF_AA"
+echo "FIVEMER_SUB_CSV  = $FIVEMER_SUB_CSV"
+echo "OUTPUT_TRUE      = $OUTPUT_TRUE"
+echo "OUTPUT_FALSE     = $OUTPUT_FALSE"
+echo "OUTPUT_FASTA     = $OUTPUT_FASTA"
+echo "--------------------------------------"
+
+# SemiGlobal aligner & Mutation caller for V-region
+sbatch --partition=dhvi --mem=25G --ntasks-per-node=2 --ntasks=2 --cpus-per-task=16\
+  --wrap="python ${REF_DIR}/scripts/SemiGlobal_aligner_and_Mutation_caller.py \
+    --query ${QUERY_AA_FASTA} \
+    --ref ${VREGION_REF_AA} \
+    --threads 16 \
+    --output ${MUTATION_CALLER_OUTPUT_VREGION}"
+
+# SemiGlobal aligner & Mutation caller for V-region
+sbatch --partition=dhvi --mem=25G --ntasks-per-node=2 --ntasks=2 --cpus-per-task=16\
+  --wrap="python ${REF_DIR}/scripts/SemiGlobal_aligner_and_Mutation_caller.py \
+    --query ${QUERY_AA_FASTA} \
+    --ref ${JREGION_REF_AA} \
+    --threads 16 \
+    --output ${MUTATION_CALLER_OUTPUT_JREGION}"
+
+echo "Waiting for both mutation caller outputs to be generated..."
+
+# Wait until both output files exist
+while [ ! -f "${MUTATION_CALLER_OUTPUT_VREGION}" ] || [ ! -f "${MUTATION_CALLER_OUTPUT_JREGION}" ]; do
+  sleep 60
+done
+
+echo "Both output files found. Run Reverse Translation with R."
+
+# Reverse Translate 
+Rscript "${REF_DIR}/scripts/SHMART.R" \
+  "${MUTATION_CALLER_OUTPUT_VREGION}" \
+  "${MUTATION_CALLER_OUTPUT_JREGION}" \
+  "${VJ_REF_NUC}" \
+  "${QUERY_AA_FASTA}" \
+  "${VJ_REF_AA}" \
+  "${FIVEMER_SUB_CSV}" \
+  "${OUTPUT_TRUE}" \
+  "${OUTPUT_FALSE}" \
+  "${OUTPUT_FASTA}"
+
+echo "Reverse Translation complete: $(date)"
