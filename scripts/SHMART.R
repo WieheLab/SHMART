@@ -3,7 +3,7 @@ args <- commandArgs(trailingOnly = TRUE)
 if ("-h" %in% args || "--help" %in% args) {
   cat(
     "Reverse Translation Script\n",
-    "Usage: Rscript SHMART.R [MUTATION_CALLER_OUTPUT_VREGION] [MUTATION_CALLER_OUTPUT_JREGION] [POOLED_REFERENCE_NUC_FASTA] [QUERY_AA_FASTA] [POOLED_REFERENCE_AA_FASTA] [FIVEMER_SUB_CSV] [OUTPUT_TRUE_TRANSLATIONS] [OUTPUT_FALSE_TRANSLATIONS] [OUTPUT_FASTA]\n\n",
+    "Usage: Rscript reverse_translation.R [MUTATION_CALLER_OUTPUT_VREGION] [MUTATION_CALLER_OUTPUT_JREGION] [POOLED_REFERENCE_NUC_FASTA] [QUERY_AA_FASTA] [POOLED_REFERENCE_AA_FASTA] [FIVEMER_SUB_CSV] [OUTPUT_TRUE_TRANSLATIONS] [OUTPUT_FALSE_TRANSLATIONS] [OUTPUT_FASTA]\n\n",
     "Parameters:\n",
     "  MUTATION_CALLER_OUTPUT_VREGION: V region mutation caller output file\n",
     "  MUTATION_CALLER_OUTPUT_JREGION: J region mutation caller output file\n",
@@ -70,28 +70,6 @@ pkgLoad()
 print(args)
 options(show.error.locations = TRUE)
 
-### args:
-## light
-# args <- c("VRegion.MutationCaller_Output.txt",                                                                                 
-# "JRegion.MutationCaller_Output.txt",                                                                                 
-# "/datacommons/dhvi/scripts/ReverseTranslation/REVERSE_TRANSLATE_FIX/databases/Pooled.Homo_sapiens.light.VJ.fasta",   
-# "CH235_UCA4_U1788NPAG0_light.fasta",                                                                                 
-# "/datacommons/dhvi/scripts/ReverseTranslation/REVERSE_TRANSLATE_FIX/databases/Pooled.Homo_sapiens.light.VJ.aa.fasta",
-# "/datacommons/dhvi/scripts/ReverseTranslation/REVERSE_TRANSLATE_FIX/databases/FivemerMutationData.csv",              
-# "CH235_UCA4_U1788NPAG0_light_ReverseTranslated.True.txt",                                                            
-# "CH235_UCA4_U1788NPAG0_light_ReverseTranslated.FAILED.txt",                                                          
-# "CH235_UCA4_U1788NPAG0_light_ReverseTranslated.True.fasta")
-
-# heavy
-args <- c("heavy/VRegion.MutationCaller_Output.txt",                                                                                 
-           "heavy/JRegion.MutationCaller_Output.txt",                                                                                 
-           "/datacommons/dhvi/scripts/ReverseTranslation/REVERSE_TRANSLATE_FIX/databases/Pooled.Homo_sapiens.heavy.VJ.fasta",   
-           "heavy/CH235_UCA4_U1788NPAG0_heavy.fasta",                                                                                 
-           "/datacommons/dhvi/scripts/ReverseTranslation/REVERSE_TRANSLATE_FIX/databases/Pooled.Homo_sapiens.heavy.VJ.aa.fasta",
-           "/datacommons/dhvi/scripts/ReverseTranslation/REVERSE_TRANSLATE_FIX/databases/FivemerMutationData.csv",              
-           "heavy/CH235_UCA4_U1788NPAG0_heavy_ReverseTranslated.True.txt",                                                            
-           "heavy/CH235_UCA4_U1788NPAG0_heavy_ReverseTranslated.FAILED.txt",                                                          
-           "heavy/CH235_UCA4_U1788NPAG0_heavy_ReverseTranslated.True.fasta")
 
 # Function to read FASTA files
 ReadFasta <- function(file) {

@@ -1,148 +1,620 @@
 #!/bin/bash
-#SBATCH --job-name=reverse_translate
-#SBATCH --ntasks=2
-#SBATCH --cpus-per-task=16
-#SBATCH --error=slurm-%j.err
-#SBATCH --mem=8G
-#SBATCH --ntasks-per-node=2
-#SBATCH --partition=dhvi
 
-## Load required modules
+#SBATCH --job-name=SHMART
+#SBATCH --partition=dhvi
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=25G
+#SBATCH --error=slurm-%j.err
+#SBATCH --output=slurm-%j.out
+
+set -euo pipefail
+
 module add R/4.0.0
 
-## HELP/USAGE 
+
+# ============================================================
+# USAGE
+# ============================================================
 
 usage() {
-  cat <<EOF
 
-  Usage: sbatch $0 [OPTIONS]
+    cat <<EOF
 
-  Required Options:
-    -q <FILE>      Path to the query amino acid FASTA 
-    -t <TYPE>      Chain type: "heavy" or "light"
-    -d <DIR>       Directory containing reference files and scripts
-    -T <FILE>      Output file for "True" translations (e.g. ReverseTranslated.True.txt)
-    -F <FILE>      Output file for "False/Failed" translations (e.g. ReverseTranslated.FAILED.txt)
-    -A <FILE>      Output FASTA of successfully translated sequences (e.g. ReverseTranslated.True.fasta)
-    -h             Show this help message and exit
+Usage:
+    sbatch $0 \
+        -q QUERY_AA_FASTA \
+        -s REFERENCE_NAME \
+        -t CHAIN_TYPE \
+        -d REFERENCE_DIR \
+        -T OUTPUT_TRUE_TXT \
+        -F OUTPUT_FAILED_TXT \
+        -A OUTPUT_RT_FASTA
+
+Required:
+
+    -q   Query amino-acid FASTA
+
+    -s   Reference/database name
+
+         Examples:
+           human
+           mouse
+           rat
+           rabbit
+           rhesus
+           camel
+           all_species
+           mouse_all
+           mouse_BALBc
+           mouse_C57BL6
+           mouse_BALBc_C57BL6
+
+    -t   Chain:
+           heavy
+           light
+
+    -d   SHMART root/reference directory
+
+    -T   Output table for successful RT sequences
+
+    -F   Output table for failed RT sequences
+
+    -A   Output FASTA for successful RT sequences
+
+    -h   Help
 
 EOF
-
 }
 
-# Initialize variables
+
+# ============================================================
+# ARGUMENTS
+# ============================================================
+
 QUERY_AA_FASTA=""
+SPECIES=""
 CHAIN_TYPE=""
 REF_DIR=""
 OUTPUT_TRUE=""
 OUTPUT_FALSE=""
 OUTPUT_FASTA=""
 
-while getopts ":q:t:d:T:F:A:h" opt; do
-  case $opt in
-    q) QUERY_AA_FASTA="$OPTARG" ;;
-    t) CHAIN_TYPE="$OPTARG" ;;
-    d) REF_DIR="$OPTARG" ;;
-    T) OUTPUT_TRUE="$OPTARG" ;;
-    F) OUTPUT_FALSE="$OPTARG" ;;
-    A) OUTPUT_FASTA="$OPTARG" ;;
-    h) usage; exit 0 ;;
-    \?) echo "Invalid option: -$OPTARG" >&2; usage; exit 1 ;;
-    :)  echo "Option -$OPTARG requires an argument." >&2; usage; exit 1 ;;
-  esac
+
+while getopts ":q:s:t:d:T:F:A:h" opt
+do
+
+    case "$opt" in
+
+        q)
+            QUERY_AA_FASTA="$OPTARG"
+            ;;
+
+        s)
+            SPECIES="$OPTARG"
+            ;;
+
+        t)
+            CHAIN_TYPE="$OPTARG"
+            ;;
+
+        d)
+            REF_DIR="$OPTARG"
+            ;;
+
+        T)
+            OUTPUT_TRUE="$OPTARG"
+            ;;
+
+        F)
+            OUTPUT_FALSE="$OPTARG"
+            ;;
+
+        A)
+            OUTPUT_FASTA="$OPTARG"
+            ;;
+
+        h)
+            usage
+            exit 0
+            ;;
+
+        \?)
+            echo "ERROR: Invalid option -$OPTARG" >&2
+            usage
+            exit 1
+            ;;
+
+        :)
+            echo "ERROR: Option -$OPTARG requires an argument." >&2
+            usage
+            exit 1
+            ;;
+
+    esac
+
 done
 
-## check args
-if [[ -z "$QUERY_AA_FASTA" || -z "$CHAIN_TYPE" || -z "$REF_DIR" || \
-      -z "$OUTPUT_TRUE" || -z "$OUTPUT_FALSE" || -z "$OUTPUT_FASTA" ]]; then
-  echo "ERROR: Missing required argument(s)."
-  usage
-  exit 1
+
+# ============================================================
+# REQUIRED ARGUMENT CHECK
+# ============================================================
+
+if [[ -z "$QUERY_AA_FASTA" ||
+      -z "$SPECIES" ||
+      -z "$CHAIN_TYPE" ||
+      -z "$REF_DIR" ||
+      -z "$OUTPUT_TRUE" ||
+      -z "$OUTPUT_FALSE" ||
+      -z "$OUTPUT_FASTA" ]]
+then
+
+    echo "ERROR: Missing required argument."
+
+    usage
+
+    exit 1
 fi
 
-# Validate chain type
-if [[ "$CHAIN_TYPE" != "heavy" && "$CHAIN_TYPE" != "light" ]]; then
-  echo "ERROR: -t|--type must be either 'heavy' or 'light'."
-  exit 1
+
+# ============================================================
+# VALIDATE CHAIN
+#
+# We deliberately DO NOT use a hard-coded species whitelist.
+#
+# -s is now interpreted as a database/reference condition.
+#
+# Examples:
+#
+# human
+# mouse
+# mouse_all
+# mouse_BALBc
+# mouse_C57BL6
+# all_species
+#
+# Existence of the appropriate database files determines
+# whether the reference name is valid.
+# ============================================================
+
+if [[ "$CHAIN_TYPE" != "heavy" &&
+      "$CHAIN_TYPE" != "light" ]]
+then
+
+    echo "ERROR: chain must be heavy or light"
+
+    exit 1
 fi
 
-## SET REFERENCE FILES BASED ON CHAIN TYPE
 
-if [[ "$CHAIN_TYPE" == "heavy" ]]; then
-  VREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGHV.aa.fasta"
-  JREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGHJ.aa.fasta"
-  VJ_REF_NUC="${REF_DIR}/databases/Pooled.Homo_sapiens.heavy.VJ.fasta"
-  VJ_REF_AA="${REF_DIR}/databases/Pooled.Homo_sapiens.heavy.VJ.aa.fasta"
-else
-  VREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGLV.aa.fasta"
-  JREGION_REF_AA="${REF_DIR}/databases/Homo_sapiensIGLJ.aa.fasta"
-  VJ_REF_NUC="${REF_DIR}/databases/Pooled.Homo_sapiens.light.VJ.fasta"
-  VJ_REF_AA="${REF_DIR}/databases/Pooled.Homo_sapiens.light.VJ.aa.fasta"
-fi
+# ============================================================
+# DATABASE PATHS
+# ============================================================
+
+SPECIES_DB="${REF_DIR}/databases/${SPECIES}"
+
+VJ_REF_NUC="${SPECIES_DB}/Pooled.${SPECIES}.${CHAIN_TYPE}.VJ.fasta"
+
+VJ_REF_AA="${SPECIES_DB}/Pooled.${SPECIES}.${CHAIN_TYPE}.VJ.aa.fasta"
+
 
 FIVEMER_SUB_CSV="${REF_DIR}/databases/FivemerMutationData.csv"
 
-MUTATION_CALLER_OUTPUT_VREGION="VRegion.MutationCaller_Output.txt"
-MUTATION_CALLER_OUTPUT_JREGION="JRegion.MutationCaller_Output.txt"
+ALIGNER="${REF_DIR}/scripts/SemiGlobal_aligner_and_Mutation_caller.py"
 
-# Check reference files
-for f in "$VREGION_REF_AA" "$JREGION_REF_AA" "$VJ_REF_NUC" "$VJ_REF_AA" "$FIVEMER_SUB_CSV"; do
-  if [[ ! -s "$f" ]]; then
-    echo "ERROR: Reference file $f does not exist or is empty."
+RT_SCRIPT="${REF_DIR}/scripts/SHMART.R"
+
+DB_METADATA=""
+
+if [[ -s "${SPECIES_DB}/${SPECIES}.database.metadata.tsv" ]]
+then
+
+    DB_METADATA="${SPECIES_DB}/${SPECIES}.database.metadata.tsv"
+
+elif [[ -s "${SPECIES_DB}/${SPECIES}.metadata.tsv" ]]
+then
+
+    DB_METADATA="${SPECIES_DB}/${SPECIES}.metadata.tsv"
+
+fi
+
+
+if [[ ! -d "$SPECIES_DB" ]]
+then
+
+    echo "ERROR: Reference database directory does not exist:"
+    echo "$SPECIES_DB"
+
     exit 1
-  fi
+fi
+
+# ============================================================
+# CHECK REQUIRED FILES
+# ============================================================
+
+for f in \
+    "$QUERY_AA_FASTA" \
+    "$VJ_REF_NUC" \
+    "$VJ_REF_AA" \
+    "$FIVEMER_SUB_CSV" \
+    "$ALIGNER" \
+    "$RT_SCRIPT"
+do
+
+    if [[ ! -s "$f" ]]
+    then
+
+        echo "ERROR: Missing or empty file:"
+        echo "$f"
+
+        exit 1
+    fi
+
 done
 
-#Run Commands
-echo "STARTING JOB: $(date)"
-echo "QUERY_AA_FASTA   = $QUERY_AA_FASTA"
-echo "CHAIN_TYPE       = $CHAIN_TYPE"
-echo "REF_DIR          = $REF_DIR"
-echo "VREGION_REF_AA   = $VREGION_REF_AA"
-echo "JREGION_REF_AA   = $JREGION_REF_AA"
-echo "VJ_REF_NUC       = $VJ_REF_NUC"
-echo "VJ_REF_AA        = $VJ_REF_AA"
-echo "FIVEMER_SUB_CSV  = $FIVEMER_SUB_CSV"
-echo "OUTPUT_TRUE      = $OUTPUT_TRUE"
-echo "OUTPUT_FALSE     = $OUTPUT_FALSE"
-echo "OUTPUT_FASTA     = $OUTPUT_FASTA"
-echo "--------------------------------------"
 
-# SemiGlobal aligner & Mutation caller for V-region
-sbatch --partition=dhvi --mem=25G --ntasks-per-node=2 --ntasks=2 --cpus-per-task=16\
-  --wrap="python ${REF_DIR}/scripts/SemiGlobal_aligner_and_Mutation_caller.py \
-    --query ${QUERY_AA_FASTA} \
-    --ref ${VREGION_REF_AA} \
-    --threads 16 \
-    --output ${MUTATION_CALLER_OUTPUT_VREGION}"
+# ============================================================
+# TEMP DIR
+# ============================================================
 
-# SemiGlobal aligner & Mutation caller for V-region
-sbatch --partition=dhvi --mem=25G --ntasks-per-node=2 --ntasks=2 --cpus-per-task=16\
-  --wrap="python ${REF_DIR}/scripts/SemiGlobal_aligner_and_Mutation_caller.py \
-    --query ${QUERY_AA_FASTA} \
-    --ref ${JREGION_REF_AA} \
-    --threads 16 \
-    --output ${MUTATION_CALLER_OUTPUT_JREGION}"
+JOBTAG="${SLURM_JOB_ID:-$$}"
 
-echo "Waiting for both mutation caller outputs to be generated..."
+TMPDIR_SHMART="${PWD}/.SHMART_${SPECIES}_${CHAIN_TYPE}_${JOBTAG}"
 
-# Wait until both output files exist
-while [ ! -f "${MUTATION_CALLER_OUTPUT_VREGION}" ] || [ ! -f "${MUTATION_CALLER_OUTPUT_JREGION}" ]; do
-  sleep 60
-done
+mkdir -p "$TMPDIR_SHMART"
 
-echo "Both output files found. Run Reverse Translation with R."
+trap 'rm -rf "$TMPDIR_SHMART"' EXIT
 
-# Reverse Translate 
-Rscript "${REF_DIR}/scripts/SHMART.R" \
-  "${MUTATION_CALLER_OUTPUT_VREGION}" \
-  "${MUTATION_CALLER_OUTPUT_JREGION}" \
-  "${VJ_REF_NUC}" \
-  "${QUERY_AA_FASTA}" \
-  "${VJ_REF_AA}" \
-  "${FIVEMER_SUB_CSV}" \
-  "${OUTPUT_TRUE}" \
-  "${OUTPUT_FALSE}" \
-  "${OUTPUT_FASTA}"
 
-echo "Reverse Translation complete: $(date)"
+# ============================================================
+# TEMPORARY V / J AA REFERENCES
+# ============================================================
+
+VREGION_REF_AA="${TMPDIR_SHMART}/${SPECIES}.${CHAIN_TYPE}.V.aa.fasta"
+
+JREGION_REF_AA="${TMPDIR_SHMART}/${SPECIES}.${CHAIN_TYPE}.J.aa.fasta"
+
+
+V_HEADERS="${TMPDIR_SHMART}/V.headers.txt"
+
+J_HEADERS="${TMPDIR_SHMART}/J.headers.txt"
+
+
+# ============================================================
+# V / J PATTERNS
+# ============================================================
+
+if [[ "$CHAIN_TYPE" == "heavy" ]]
+then
+
+    V_PATTERN="IGHV"
+
+    J_PATTERN="IGHJ"
+
+else
+
+    # pooled kappa + lambda
+
+    V_PATTERN="IGKV|IGLV"
+
+    J_PATTERN="IGKJ|IGLJ"
+
+fi
+
+
+# ============================================================
+# extract FASTA records by a list of exact header IDs
+# ============================================================
+
+extract_by_header_list() {
+
+    local header_file="$1"
+
+    local fasta_file="$2"
+
+    local output_file="$3"
+
+
+    awk '
+
+        NR == FNR {
+
+            wanted[$1] = 1
+
+            next
+        }
+
+
+        /^>/ {
+
+            h = substr($0, 2)
+
+            split(h, a, /[[:space:]]+/)
+
+            keep = (a[1] in wanted)
+        }
+
+
+        keep
+
+    ' "$header_file" "$fasta_file" > "$output_file"
+}
+
+
+# ============================================================
+# FIRST TRY:
+# Identify V / J directly from FASTA headers
+# ============================================================
+
+awk -v pattern="$V_PATTERN" '
+
+    /^>/ {
+
+        keep = ($0 ~ pattern)
+    }
+
+    keep
+
+' "$VJ_REF_AA" > "$VREGION_REF_AA"
+
+
+awk -v pattern="$J_PATTERN" '
+
+    /^>/ {
+
+        keep = ($0 ~ pattern)
+    }
+
+    keep
+
+' "$VJ_REF_AA" > "$JREGION_REF_AA"
+
+
+NV=$(grep -c '^>' "$VREGION_REF_AA" || true)
+
+NJ=$(grep -c '^>' "$JREGION_REF_AA" || true)
+
+
+if [[ "$NV" -eq 0 || "$NJ" -eq 0 ]]
+then
+
+    if [[ -n "$DB_METADATA" ]]
+    then
+
+        echo
+        echo "V/J labels not fully present in FASTA headers."
+        echo "Using database metadata:"
+        echo "$DB_METADATA"
+        echo
+
+        awk \
+            -F '\t' \
+            -v pattern="$V_PATTERN" '
+
+            NR == 1 {
+                next
+            }
+
+            $0 ~ pattern {
+                print $1
+            }
+
+        ' "$DB_METADATA" \
+        | sort -u \
+        > "$V_HEADERS"
+
+        awk \
+            -F '\t' \
+            -v pattern="$J_PATTERN" '
+
+            NR == 1 {
+                next
+            }
+
+            $0 ~ pattern {
+                print $1
+            }
+
+        ' "$DB_METADATA" \
+        | sort -u \
+        > "$J_HEADERS"
+
+
+        if [[ "$NV" -eq 0 ]]
+        then
+
+            extract_by_header_list \
+                "$V_HEADERS" \
+                "$VJ_REF_AA" \
+                "$VREGION_REF_AA"
+
+        fi
+
+
+        if [[ "$NJ" -eq 0 ]]
+        then
+
+            extract_by_header_list \
+                "$J_HEADERS" \
+                "$VJ_REF_AA" \
+                "$JREGION_REF_AA"
+
+        fi
+
+
+        NV=$(grep -c '^>' "$VREGION_REF_AA" || true)
+
+        NJ=$(grep -c '^>' "$JREGION_REF_AA" || true)
+
+    fi
+
+fi
+
+
+
+echo "SHMART"
+
+echo "Reference:        $SPECIES"
+
+echo "Chain:            $CHAIN_TYPE"
+
+echo "Query:            $QUERY_AA_FASTA"
+
+echo "Database:         $SPECIES_DB"
+
+echo "Pooled AA:        $VJ_REF_AA"
+
+echo "Pooled NT:        $VJ_REF_NUC"
+
+echo "V references:     $NV"
+
+echo "J references:     $NJ"
+
+echo "S5F table:        $FIVEMER_SUB_CSV"
+
+if [[ -n "$DB_METADATA" ]]
+then
+
+    echo "DB metadata:      $DB_METADATA"
+
+fi
+
+echo
+
+
+# ============================================================
+# FINAL V / J CHECK
+# ============================================================
+
+if [[ "$NV" -eq 0 ]]
+then
+
+    echo "ERROR: No V references found in:"
+    echo "$VJ_REF_AA"
+
+    echo
+
+    echo "Pattern used:"
+    echo "$V_PATTERN"
+
+    if [[ -n "$DB_METADATA" ]]
+    then
+
+        echo
+
+        echo "Metadata also checked:"
+        echo "$DB_METADATA"
+
+    fi
+
+    exit 1
+fi
+
+
+if [[ "$NJ" -eq 0 ]]
+then
+
+    echo "ERROR: No J references found in:"
+    echo "$VJ_REF_AA"
+
+    echo
+
+    echo "Pattern used:"
+    echo "$J_PATTERN"
+
+    if [[ -n "$DB_METADATA" ]]
+    then
+
+        echo
+
+        echo "Metadata also checked:"
+        echo "$DB_METADATA"
+
+    fi
+
+    exit 1
+fi
+
+
+# ============================================================
+# MUTATION CALLER OUTPUTS
+# ============================================================
+
+V_OUTPUT="${TMPDIR_SHMART}/VRegion.MutationCaller_Output.txt"
+
+J_OUTPUT="${TMPDIR_SHMART}/JRegion.MutationCaller_Output.txt"
+
+THREADS="${SLURM_CPUS_PER_TASK:-16}"
+
+
+# ============================================================
+# V ALIGNMENT
+# ============================================================
+
+echo
+echo "Running V-region alignment..."
+
+python "$ALIGNER" \
+    --query "$QUERY_AA_FASTA" \
+    --ref "$VREGION_REF_AA" \
+    --threads "$THREADS" \
+    --output "$V_OUTPUT"
+
+
+# ============================================================
+# J ALIGNMENT
+# ============================================================
+
+echo
+echo "Running J-region alignment..."
+
+python "$ALIGNER" \
+    --query "$QUERY_AA_FASTA" \
+    --ref "$JREGION_REF_AA" \
+    --threads "$THREADS" \
+    --output "$J_OUTPUT"
+
+
+# ============================================================
+# REVERSE TRANSLATION
+# ============================================================
+
+echo
+echo "Running reverse translation..."
+
+
+Rscript "$RT_SCRIPT" \
+    "$V_OUTPUT" \
+    "$J_OUTPUT" \
+    "$VJ_REF_NUC" \
+    "$QUERY_AA_FASTA" \
+    "$VJ_REF_AA" \
+    "$FIVEMER_SUB_CSV" \
+    "$OUTPUT_TRUE" \
+    "$OUTPUT_FALSE" \
+    "$OUTPUT_FASTA"
+
+
+# ============================================================
+# COMPLETE
+# ============================================================
+
+echo
+echo "================================================"
+echo "SHMART COMPLETE"
+echo "================================================"
+echo
+
+echo "Reference:      $SPECIES"
+
+echo "Chain:          $CHAIN_TYPE"
+
+echo "True output:    $OUTPUT_TRUE"
+
+echo "Failed output:  $OUTPUT_FALSE"
+
+echo "FASTA output:   $OUTPUT_FASTA"
+
+echo "Finished:       $(date)"
+
+echo
